@@ -63,7 +63,7 @@ pre{background:#000;color:#7CFC00;padding:10px;height:200px;overflow:auto;border
 <div class="card"><b>Serial @115200</b> <small>DUT + meter</small><pre id="ser"></pre></div>
 
 <div class="card"><b>Real meter — photo reference</b> <small>used as 3D cluster texture above</small><br>
-<img class="refimg" src="/assets/meter-cluster.jpg" alt="Ayca e-rickshaw meter cluster">
+<img class="refimg" src="/assets/meter-cluster.jpg" alt="E-rickshaw meter cluster">
 <img class="refimg" src="/assets/meter-segments.jpg" alt="BMS segment layout close-up">
 </div>
 
@@ -186,7 +186,7 @@ const lcdCanvas=document.createElement('canvas');lcdCanvas.width=512;lcdCanvas.h
 const lcdTex=new THREE.CanvasTexture(lcdCanvas);
 const lcd=new THREE.Mesh(new THREE.PlaneGeometry(6.2,1.35),new THREE.MeshBasicMaterial({map:lcdTex,transparent:true}));
 lcd.position.set(0,0.95,2.33);lcd.rotation.x=-0.05;meterG.add(lcd);
-const meterTag=labelSprite('AYCA E-RICKSHAW METER (real photo)',1.1);
+const meterTag=labelSprite('E-RICKSHAW METER (real photo)',1.1);
 meterTag.position.set(8.6,4.8,-2.2);scene.add(meterTag);
 const mPow=tactile(0x111111,11.4,-0.6,scene,'meterpower');
 const mMode=tactile(0x9aa3b5,12.6,-0.6,scene,'meterpoll');

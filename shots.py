@@ -156,7 +156,7 @@ def static_svg(kind, fw=None):
         box(230,120,150,44,"ESP32-S3","#93c5fd"); arrow(152,202,230,142,"#22d3ee")
         box(230,220,150,44,"8× RELAY","#2456c6"); arrow(250,164,250,220,"#fb923c")
         box(230,300,150,44,"MAX485","#1e40af"); arrow(305,164,305,300,"#e6b800")
-        box(460,220,208,44,"METER (Ayca)","#4ade80"); arrow(380,322,460,242,"#4ade80")
+        box(460,220,208,44,"METER","#4ade80"); arrow(380,322,460,242,"#4ade80")
         s.append('<text x="460" y="290" fill="#64748b" font-size="12">J1: 48V GND A B R1 · J2: R2-R6 · AUX: R7 R8</text>')
         box(460,300,208,44,"GX16-5 ×2","#8f97a5"); arrow(535,264,535,300)
         s.append('<text x="12" y="392" fill="#64748b" font-size="12">star GND everywhere · DAD: fuse + wire gauge per channel (≤3A default)</text>')
