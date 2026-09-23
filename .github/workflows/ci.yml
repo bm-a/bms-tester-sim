@@ -9,6 +9,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m compileall -q .
-      - run: python sim_server.py --port 8008 &
-      - run: for i in $(seq 1 30); do curl -sf http://127.0.0.1:8008/api/state && break || sleep 1; done
-      - run: python verify_sim.py
+      - run: |
+          python sim_server.py --port 8008 & SERVER=$!
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8008/api/state && break || sleep 1; done
+          curl -sf http://127.0.0.1:8008/api/state
+          python verify_sim.py
+          kill $SERVER
