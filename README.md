@@ -1,5 +1,9 @@
 # local-wokwi — offline browser simulator for this BMS tester
 
+![FULL dashboard snapshot](https://github.com/bm-a/bms-connection-tester/releases/download/v2.7/dash-full.png)
+
+![Sequential + spoof demo](https://github.com/bm-a/bms-connection-tester/releases/download/v2.7/demo.gif)
+
 Your own mini-Wokwi that runs on your phone / laptop with **no internet**.
 Same idea as wokwi.com: virtual board + LEDs + buttons + relays + serial log,
 driven by the real `../wokwi/diagram.json` wiring in this repo.
