@@ -178,7 +178,7 @@ def load_demo(name):
             p = os.path.join(HERE, "..", "wokwi", "diagram.json")
             disp = f"bms-connection-tester v{FW_VERSION} (real)"
     with open(p) as f:
-        diag = json.load(f)
+        diag = json.load(f) if os.path.exists(p) else {"parts": []}
     global diagram_cache
     diagram_cache = diag
     state["demo"] = disp
