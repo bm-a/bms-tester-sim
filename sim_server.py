@@ -431,6 +431,34 @@ def fw_state():
         },
     }
 
+def ota_cmp(a, b):
+    """Host port of ota_cmp_version (ota.h): tolerates leading 'v'."""
+    def parts(s):
+        s = str(s).lstrip("vV")
+        out = []
+        for p in s.split("."):
+            out.append(int(p) if p.isdigit() else 0)
+        return out
+    pa, pb = parts(a), parts(b)
+    for x, y in zip(pa + [0]*3, pb + [0]*3):
+        if x != y:
+            return 1 if x > y else -1
+    return 0
+
+def ota_live_check():
+    """Real GitHub check like the box does (api.github.com releases/latest).
+    Returns (tag, asset_names) or (None, []) offline/failure."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.github.com/repos/bm-a/bms-connection-tester/releases/latest",
+            headers={"User-Agent": "bms-tester-sim", "Accept": "application/vnd.github+json"})
+        d = json.load(urllib.request.urlopen(req, timeout=10))
+        return d.get("tag_name", ""), [x.get("name", "") for x in d.get("assets", [])]
+    except Exception as e:
+        log(f"OTA check: GitHub unreachable ({type(e).__name__}) — sim default")
+        return None, []
+
 def handle_esp_post(path, data):
     """Drive the sim from the REAL dashboard's POSTs. Returns (ok, err)."""
     if path == "/api/relay":
@@ -554,13 +582,27 @@ def handle_esp_post(path, data):
             o["auto"] = bool(int(data["ota_auto"]))
         if c == "check":
             o["status"] = "checking..."
-            o["latest_tag"] = "v2.6"
-            o["pending"] = False
-            o["status"] = "up to date"
-            log("ESP OTA check: GitHub releases/latest -> v2.6 (up to date)")
+            tag, assets = ota_live_check()
+            if tag:
+                o["latest_tag"] = tag
+                o["assets"] = assets
+                o["pending"] = ota_cmp(tag, FW_VERSION) > 0
+                want = {"firmware.bin", "n16r8-firmware.bin"} & set(assets)
+                o["status"] = (f"update available ({', '.join(sorted(want))} present)"
+                               if o["pending"] and want else
+                               "up to date" if not o["pending"] else
+                               "update available BUT no firmware asset on GH (bins pending bench-PC build)")
+                log(f"ESP OTA check: releases/latest -> {tag} assets={len(assets)} => {o['status']}")
+            else:
+                o["latest_tag"] = "v2.6"
+                o["pending"] = False
+                o["status"] = "up to date (sim offline default)"
         elif c == "install":
             if not o["pending"]:
                 log("ESP OTA install: nothing pending (sim) — check first")
+            elif not ({"firmware.bin", "n16r8-firmware.bin"} & set(o.get("assets", []))):
+                o["status"] = "install http 404"
+                log("ESP OTA install: install http 404 (sim matches HW — no firmware asset on GH yet, box keeps running)")
             else:
                 o["status"] = "installing..."
                 o["progress"] = 100
