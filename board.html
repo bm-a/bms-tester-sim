@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>local-wokwi v2.6 — BMS tester bench</title>
+<style>
+body{font-family:monospace;background:#0b0e14;color:#d6deeb;margin:0;padding:12px}
+h2{color:#7dd3fc;margin:6px 0}small{color:#64748b}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.card{background:#111624;border:1px solid #26314d;border-radius:10px;padding:10px;flex:1;min-width:300px}
+#bench{flex:2.2;min-width:340px}
+#canvas{background:#dfe3ec;border-radius:8px;width:100%;height:auto;display:block;touch-action:manipulation}
+button{background:#1d4ed8;color:#fff;border:0;border-radius:8px;padding:8px 14px;margin:4px;font-size:15px}
+button.g{background:#166534}select{background:#0f172a;color:#fff;padding:6px;border-radius:6px}
+pre{background:#000;color:#7CFC00;padding:10px;height:300px;overflow:auto;border-radius:8px;font-size:12px}
+.pill{display:inline-block;padding:3px 12px;border-radius:20px;font-weight:bold}
+.pill.green{background:#166534;color:#bbf7d0}.pill.red{background:#7f1d1d;color:#fecaca}
+svg text{user-select:none}
+</style></head>
+<body>
+<h2>● local-wokwi v2.6 <small>bms-connection-tester bench · offline</small></h2>
+<div class="row">
+<div class="card" id="bench">
+<div>
+demo: <select id="demo">
+<option value="real">bms-tester v2.6 (real diagram)</option>
+<option>portfolio-01-relay-web</option>
+<option>portfolio-02-climate-mqtt</option>
+<option>portfolio-03-bms-rs485</option>
+</select>
+<button class="g" onclick="loadDemo()">Load</button>
+<span id="link"></span>
+</div>
+<div style="margin:6px 0">
+<button class="g" onclick="run(true)">▶</button>
+<button onclick="run(false)">⏸</button>
+<button onclick="meter(true)">🔌 meter on</button>
+<button onclick="meter(false)">🔌 meter off</button>
+<button onclick="cmd()">STATUS?</button>
+</div>
+<svg id="canvas" viewBox="-140 -170 820 1150"></svg>
+<div><small>tap red BUTTON (relay step) / SPOOF (10 s test values) · wires = your real diagram.json</small></div>
+</div>
+<div class="card"><b>Serial @115200</b> <small>DUT + virtual meter</small><pre id="ser"></pre></div>
+</div>
+<script>
+let DIAG={parts:[],connections:[]}, ST=null;
+const WCOL={red:"#d63c2f",black:"#2b2f36",green:"#2fa84f",yellow:"#c99300",orange:"#e07b24",white:"#ffffff",blue:"#2f6fd6",gray:"#6b7280"};
+const BW=150, BH=380;
+const LEFT_PINS=["VCC","GND.1","5","6","7","8","9"];
+const RIGHT_PINS=["10","11","48","15","21","12","13","14"];
+async function api(p,o){let r=await fetch(p,o);return r.json()}
+async function loadDemo(){await api('/api/demo?name='+encodeURIComponent(document.getElementById('demo').value));await refreshDiagram();poll()}
+async function press(id){await api('/api/press',{method:'POST',body:JSON.stringify({id})});poll()}
+async function run(v){await api('/api/run',{method:'POST',body:JSON.stringify({running:v})});poll()}
+async function meter(v){await api('/api/meter',{method:'POST',body:JSON.stringify({on:v})});poll()}
+async function cmd(){await api('/api/cmd',{method:'POST',body:JSON.stringify({cmd:'STATUS?'})});poll()}
+async function refreshDiagram(){try{DIAG=await api('/api/diagram')}catch(e){DIAG={parts:[],connections:[]}}}
+function spread(i,n){return 70+(i+1)*(240/Math.max(n+1,2))}
+function boardAnchor(p,pin){
+  const L=p.left||0,T=p.top||0;
+  if(pin==="17"||pin==="16"){const i=pin==="17"?0:1;
+    if(p.id==="meter")return{x:L+45+i*60,y:T};
+    return{x:L+45+i*60,y:T+BH};}
+  if(p.id==="meter"){const o=["GND.1","16","17"];let i=o.indexOf(pin);if(i<0)i=1;
+    return{x:L+30+i*45,y:T};}
+  let li=LEFT_PINS.indexOf(pin);if(li>=0)return{x:L,y:T+spread(li,LEFT_PINS.length)};
+  let ri=RIGHT_PINS.indexOf(pin);if(ri>=0)return{x:L+BW,y:T+spread(ri,RIGHT_PINS.length)};
+  return{x:L+BW/2,y:T+BH/2};
+}
+function relayAnchor(p,pin){
+  const L=p.left||0,T=p.top||0,W=130,H=75;
+  if(pin==="IN")return{x:L,y:T+14};if(pin==="VCC")return{x:L,y:T+38};if(pin==="GND")return{x:L,y:T+60};
+  if(pin==="COM")return{x:L+W,y:T+24};if(pin==="NO")return{x:L+W,y:T+52};
+  return{x:L+W/2,y:T+H/2};
+}
+function anchor(pid,pin){
+  const p=DIAG.parts.find(q=>q.id===pid);if(!p)return null;
+  if(p.type.includes("esp32")||p.type.includes("esp8266"))return boardAnchor(p,pin);
+  const L=p.left||0,T=p.top||0;
+  if(p.type.includes("relay"))return relayAnchor(p,pin);
+  if(p.type.includes("led")){if(pin==="A")return{x:L+8,y:T+58};return{x:L+32,y:T+58};}
+  if(p.type.includes("resistor")){if(pin==="1")return{x:L,y:T+10};return{x:L+50,y:T+10};}
+  if(p.type.includes("button")){if(String(pin).startsWith("1"))return{x:L+10,y:T+40};return{x:L+30,y:T+40};}
+  if(p.type.includes("neopixel"))return{x:L+10,y:T};
+  return{x:L+20,y:T+20};
+}
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+function drawBoard(p){
+  const L=p.left||0,T=p.top||0;let s=`<g><rect x="${L}" y="${T}" width="${BW}" height="${BH}" rx="8" fill="#202634" stroke="#0d1017" stroke-width="3"/>`;
+  s+=`<rect x="${L+55}" y="${T-14}" width="40" height="16" rx="3" fill="#b9c1cc" stroke="#6b7280"/><text x="${L+75}" y="${T+40}" fill="#8b93a7" font-size="11" text-anchor="middle">USB</text>`;
+  s+=`<rect x="${L+45}" y="${T+120}" width="60" height="60" rx="4" fill="#101319" stroke="#39415a"/><text x="${L+75}" y="${T+146}" fill="#c6cddc" font-size="11" text-anchor="middle">ESP32</text><text x="${L+75}" y="${T+162}" fill="#8b93a7" font-size="11" text-anchor="middle">S3</text>`;
+  const pin=(x,y,label,side)=>{s+=`<rect x="${x-4}" y="${y-5}" width="8" height="10" fill="#c9a227"/><text x="${side<0?x-9:x+9}" y="${y+4}" fill="#9aa3b5" font-size="10" text-anchor="${side<0?"end":"start"}">${esc(label)}</text>`};
+  LEFT_PINS.forEach((n,i)=>pin(L,T+spread(i,LEFT_PINS.length),n,-1));
+  RIGHT_PINS.forEach((n,i)=>pin(L+BW,T+spread(i,RIGHT_PINS.length),n,1));
+  pin(L+45,T+BH,"17",0);pin(L+105,T+BH,"16",0);
+  s+=`<text x="${L+75}" y="${T+BH-12}" fill="#e5e9f2" font-size="12" text-anchor="middle">${esc(p.id)}</text></g>`;
+  return s;
+}
+function drawLed(p){
+  const L=p.left||0,T=p.top||0;
+  const col=(p.attrs&&p.attrs.color)||"red";
+  const hex={green:"#22c55e",red:"#ef4444",yellow:"#eab308",blue:"#3b82f6"}[col]||"#ef4444";
+  const on=ST&&ST.leds[p.id];
+  return `<g><line x1="${L+8}" y1="${T+28}" x2="${L+8}" y2="${T+58}" stroke="#9aa3b5" stroke-width="3"/><line x1="${L+32}" y1="${T+28}" x2="${L+32}" y2="${T+58}" stroke="#9aa3b5" stroke-width="3"/>`+
+  `<circle cx="${L+20}" cy="${T+16}" r="14" fill="${hex}" opacity="${on?1:0.28}" ${on?`style="filter:drop-shadow(0 0 10px ${hex})" `:""}/> `+
+  `<text x="${L+20}" y="${T+72}" fill="#4b5563" font-size="10" text-anchor="middle">${esc(p.id)}</text></g>`;
+}
+function drawRelay(p){
+  const L=p.left||0,T=p.top||0,W=130,H=75;
+  const on=ST&&ST.relays[p.id];
+  let s=`<g><rect x="${L}" y="${T}" width="${W}" height="${H}" rx="5" fill="#2456c6" stroke="${on?"#fbbf24":"#12306e"}" stroke-width="${on?3:2}"/>`;
+  s+=`<rect x="${L+W-34}" y="${T+8}" width="28" height="24" fill="#1f7a3d"/><rect x="${L+W-34}" y="${T+44}" width="28" height="24" fill="#1f7a3d"/>`;
+  s+=`<text x="${L+W-20}" y="${T+24}" fill="#d1fae5" font-size="9" text-anchor="middle">COM</text><text x="${L+W-20}" y="${T+60}" fill="#d1fae5" font-size="9" text-anchor="middle">NO</text>`;
+  ["IN","VCC","GND"].forEach((n,i)=>{s+=`<rect x="${L-6}" y="${T+8+i*24}" width="8" height="10" fill="#c9a227"/><text x="${L+12}" y="${T+17+i*24}" fill="#dbeafe" font-size="9">${n}</text>`});
+  s+=`<circle cx="${L+W-48}" cy="${T+16}" r="6" fill="${on?"#ef4444":"#7f1d1d"}" ${on?`style="filter:drop-shadow(0 0 8px #ef4444)"`:""}/>`;
+  s+=`<text x="${L+8}" y="${T+H-8}" fill="#dbeafe" font-size="10">${esc(p.id)}${on?" ●ON":""}</text></g>`;
+  return s;
+}
+function drawButton(p){
+  const L=p.left||0,T=p.top||0;
+  return `<g onclick="press('${esc(p.id)}')" style="cursor:pointer"><rect x="${L}" y="${T}" width="40" height="40" rx="6" fill="#151a23" stroke="#39415a" stroke-width="2"/><circle cx="${L+20}" cy="${T+20}" r="11" fill="#d63c2f" stroke="#7f1d1d" stroke-width="2"/><circle cx="${L+20}" cy="${T+20}" r="4" fill="#7f1d1d"/><text x="${L+20}" y="${T+54}" fill="#4b5563" font-size="10" text-anchor="middle">${esc(p.id)}</text></g>`;
+}
+function drawResistor(p){
+  const L=p.left||0,T=p.top||0;
+  return `<g><line x1="${L-14}" y1="${T+10}" x2="${L}" y2="${T+10}" stroke="#9aa3b5" stroke-width="2"/><line x1="${L+50}" y1="${T+10}" x2="${L+64}" y2="${T+10}" stroke="#9aa3b5" stroke-width="2"/><rect x="${L}" y="${T+2}" width="50" height="16" rx="8" fill="#d9b48f" stroke="#a97c50"/><line x1="${L+14}" y1="${T+2}" x2="${L+14}" y2="${T+18}" stroke="#7c2d12" stroke-width="3"/><line x1="${L+26}" y1="${T+2}" x2="${L+26}" y2="${T+18}" stroke="#1f2937" stroke-width="3"/></g>`;
+}
+function drawPixel(p){
+  const L=p.left||0,T=p.top||0;const on=ST&&ST.leds[p.id];
+  const c=!on?"#374151":(ST&&ST.connected?"#22c55e":"#ef4444");
+  return `<g><rect x="${L}" y="${T-8}" width="20" height="20" rx="3" fill="#101319" stroke="#39415a"/><rect x="${L+4}" y="${T-4}" width="12" height="12" fill="${c}" ${on?`style="filter:drop-shadow(0 0 8px ${c})" `:""}/><text x="${L+10}" y="${T+26}" fill="#4b5563" font-size="10" text-anchor="middle">RGB</text></g>`;
+}
+function drawWires(){
+  let s="";const used={};
+  (DIAG.connections||[]).forEach(c=>{
+    const a=anchor(c[0].split(":")[0],c[0].split(":").slice(1).join(":"));
+    const b=anchor(c[1].split(":")[0],c[1].split(":").slice(1).join(":"));
+    if(!a||!b)return;
+    const k1=c[0],k2=c[1];used[k1]=(used[k1]||0)+1;used[k2]=(used[k2]||0)+1;
+    const off=((used[k1]+used[k2])%5-2)*4;
+    const col=WCOL[c[2]]||"#6b7280";
+    const dy=Math.max(20,Math.min(120,Math.abs(b.y-a.y)/2));
+    const d=`M ${a.x} ${a.y} C ${a.x+off} ${a.y+dy}, ${b.x-off} ${b.y-dy}, ${b.x} ${b.y}`;
+    s+=`<path d="${d}" fill="none" stroke="#1c1f26" stroke-width="5" opacity="0.25" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2.8" opacity="0.95" stroke-linecap="round"/>`;
+  });
+  return s;
+}
+function draw(){
+  const cv=document.getElementById('canvas');if(!DIAG.parts.length){cv.innerHTML="";return}
+  let s=`<defs><rect id="bg" x="-140" y="-170" width="820" height="1150" fill="#dfe3ec"/></defs><use href="#bg"/>`;
+  s+=drawWires();
+  DIAG.parts.forEach(p=>{
+    if(p.type.includes("esp32")||p.type.includes("esp8266"))s+=drawBoard(p);
+    else if(p.type.includes("relay"))s+=drawRelay(p);
+    else if(p.type.includes("led"))s+=drawLed(p);
+    else if(p.type.includes("button"))s+=drawButton(p);
+    else if(p.type.includes("resistor"))s+=drawResistor(p);
+    else if(p.type.includes("neopixel"))s+=drawPixel(p);
+  });
+  // fit viewBox to content
+  let xs=[-140],ys=[-170],xe=[680],ye=[980];
+  DIAG.parts.forEach(p=>{xs.push(p.left||0);ys.push(p.top||0)});
+  const x0=Math.min(...xs)-90,y0=Math.min(...ys)-80;
+  cv.setAttribute('viewBox',`${x0} ${y0} 820 1150`);
+  cv.innerHTML=s;
+  const conn=ST&&ST.connected;
+  document.getElementById('link').innerHTML=` <span class="pill ${conn?'green':'red'}">${conn?'● GREEN link':'● RED no-link'}</span>`;
+}
+async function poll(){
+  ST=await api('/api/state');
+  document.getElementById('ser').textContent=(ST.serial||[]).join('\n');
+  const pre=document.getElementById('ser');pre.scrollTop=pre.scrollHeight;
+  draw();
+}
+(async()=>{await refreshDiagram();poll();setInterval(poll,1200)})();
+</script>
+</body></html>

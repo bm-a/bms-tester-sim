@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>local-wokwi 3D — BMS tester v2.6 standalone bench</title>
+<style>
+body{font-family:monospace;background:#0b0e14;color:#d6deeb;margin:0;padding:12px}
+h2{color:#7dd3fc;margin:6px 0}small{color:#64748b}
+.card{background:#111624;border:1px solid #26314d;border-radius:10px;padding:10px;margin:10px 0}
+#view{width:100%;height:520px;display:block;border-radius:8px;background:#05070c;touch-action:none}
+button{background:#1d4ed8;color:#fff;border:0;border-radius:8px;padding:8px 14px;margin:4px;font-size:15px}
+button.g{background:#166534}button.danger{background:#b91c1c}button.warn{background:#b45309}button.ok{background:#15803d}
+button.off{background:#7f1d1d}
+select,input{background:#0f172a;color:#fff;padding:6px;border-radius:6px;border:1px solid #475569}
+pre{background:#000;color:#7CFC00;padding:10px;height:200px;overflow:auto;border-radius:8px;font-size:12px}
+.pill{display:inline-block;padding:3px 12px;border-radius:20px;font-weight:bold}
+.pill.green{background:#166534;color:#bbf7d0}.pill.red{background:#7f1d1d;color:#fecaca}
+.pill.amber{background:#78350f;color:#fde68a}
+#espframe{width:100%;height:620px;border:1px solid #334155;border-radius:12px;background:#0f172a}
+.espwrap{overflow:auto;border-radius:12px}
+.refimg{max-width:100%;border-radius:8px;border:1px solid #334155}
+</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+</head>
+<body>
+<h2>● local-wokwi 3D <small>bms-connection-tester v2.6 · standalone 48V box · GX16 meter link · phone-hosted</small></h2>
+<div class="card">
+<div>
+<button class="g" onclick="apiRun(true)">▶</button>
+<button onclick="apiRun(false)">⏸</button>
+<button onclick="apiMeter(true)">🔌 meter on</button>
+<button onclick="apiMeter(false)">🔌 meter off</button>
+<button id="wifibtn" class="g" onclick="apiWifi()">📶 WiFi: ON</button>
+<button onclick="apiOtaCheck()">☁ OTA check</button>
+<button class="danger" onclick="apiFactoryReset()">⚠ factory reset</button>
+<button onclick="toggleLid()">📦 lid</button>
+<button onclick="apiCmd()">STATUS?</button>
+<span id="link"></span> <small>drag = orbit · wheel = zoom · tap buttons, relays, GX16 plugs, meter keys</small>
+</div>
+<canvas id="view"></canvas>
+<div><small id="gx16line">GX16 map loading…</small></div>
+</div>
+
+<style>
+.dashgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:10px 0}
+.rly{border:2px solid #475569;background:#0f172a;color:#94a3b8;border-radius:10px;padding:14px 4px;font-size:15px;font-weight:700;cursor:pointer;transition:border-color .3s,box-shadow .3s,background .3s,color .3s}
+.rly small{display:block;font-size:11px;font-weight:400}
+.rly.on{border-color:#22c55e;background:#052e16;color:#4ade80;box-shadow:0 0 12px #22c55e66}
+.nmin{width:100%;box-sizing:border-box}
+</style>
+<div class="card">
+<b>Relay board</b> <small>tap tile = force ON/OFF (IDLE only) · names persist (labels.json, NVS on HW) · <span id="seqline"></span></small>
+<div style="margin:6px 0"><button class="ok" onclick="seqStart()">▶ START</button><button class="danger" onclick="seqStop()">STOP ALL</button> <span id="seqmsg2" style="color:#4ade80"></span></div>
+<div class="dashgrid" id="rboard"></div>
+<div class="dashgrid" id="rnames"></div>
+<div><button onclick="saveNames()">Save names</button> <span id="lblmsg2" style="color:#4ade80"></span></div>
+</div>
+
+<div class="card">
+<b>ESP32 webpage — the real dashboard (verbatim from firmware)</b>
+<small>scrollable window below · clicks drive the sim + 3D live · <span id="espstate"></span></small>
+<div class="espwrap"><iframe id="espframe" src="/esp/" title="ESP32 BMS Tester dashboard"></iframe></div>
+</div>
+
+<div class="card"><b>Serial @115200</b> <small>DUT + meter</small><pre id="ser"></pre></div>
+
+<div class="card"><b>Real meter — photo reference</b> <small>used as 3D cluster texture above</small><br>
+<img class="refimg" src="/assets/meter-cluster.jpg" alt="Ayca e-rickshaw meter cluster">
+<img class="refimg" src="/assets/meter-segments.jpg" alt="BMS segment layout close-up">
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+async function api(p,o){let r=await fetch(p,o);return r.json()}
+const canvas=document.getElementById('view');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x05070c);
+const camera=new THREE.PerspectiveCamera(50,2,0.1,220);
+camera.position.set(0,19,30);
+const ctl=new OrbitControls(camera,canvas);ctl.target.set(0,0,4);ctl.update();
+scene.add(new THREE.AmbientLight(0xffffff,0.75));
+const key=new THREE.DirectionalLight(0xffffff,1.1);key.position.set(8,18,10);scene.add(key);
+function resize(){const w=canvas.clientWidth,h=canvas.clientHeight;if(canvas.width!==w||canvas.height!==h){renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}}
+const M={
+  pcb:new THREE.MeshStandardMaterial({color:0x1d3a8f,roughness:0.6}),
+  dark:new THREE.MeshStandardMaterial({color:0x202634,roughness:0.7}),
+  gold:new THREE.MeshStandardMaterial({color:0xc9a227,metalness:0.8,roughness:0.35}),
+  silver:new THREE.MeshStandardMaterial({color:0xb9c1cc,metalness:0.85,roughness:0.3}),
+  steel:new THREE.MeshStandardMaterial({color:0x8f97a5,metalness:0.9,roughness:0.25}),
+  chip:new THREE.MeshStandardMaterial({color:0x101319,roughness:0.5}),
+  relayBlue:new THREE.MeshStandardMaterial({color:0x2456c6,roughness:0.55}),
+  terminal:new THREE.MeshStandardMaterial({color:0x1f7a3d,roughness:0.6}),
+  bench:new THREE.MeshStandardMaterial({color:0x3a2d1d,roughness:0.9}),
+  boxGray:new THREE.MeshStandardMaterial({color:0x39415a,roughness:0.7,transparent:true,opacity:0.28}),
+  buck:new THREE.MeshStandardMaterial({color:0x7c2d12,roughness:0.6}),
+  buck2:new THREE.MeshStandardMaterial({color:0x14532d,roughness:0.6}),
+  white:new THREE.MeshStandardMaterial({color:0xe5e9f2}),
+  black:new THREE.MeshStandardMaterial({color:0x111318,roughness:0.6}),
+};
+function box(w,h,d,mat,x,y,z,parent){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.position.set(x,y,z);(parent||scene).add(m);return m}
+function labelSprite(text,scale){
+  const c=document.createElement('canvas');c.width=512;c.height=64;
+  const g=c.getContext('2d');g.font='bold 34px monospace';g.fillStyle='#e5e9f2';g.textAlign='center';g.fillText(text,256,44);
+  const t=new THREE.CanvasTexture(c);
+  return new THREE.Mesh(new THREE.PlaneGeometry(2.4*scale,0.3*scale),new THREE.MeshBasicMaterial({map:t,transparent:true}));
+}
+// bench
+box(34,0.6,26,M.bench,0,-0.3,4);
+// ---- IP65 enclosure (toggleable lid+walls) ----
+const lidG=new THREE.Group();scene.add(lidG);
+(function(){
+  const wall=(w,h,d,x,y,z)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),M.boxGray);m.position.set(x,y,z);lidG.add(m)};
+  wall(30,7,0.4,0,3.5,-8.6);wall(30,7,0.4,0,3.5,16.6);
+  wall(0.4,7,25.6,-15,3.5,4);wall(0.4,7,25.6,15,3.5,4);
+  const lid=new THREE.Mesh(new THREE.BoxGeometry(30,0.4,25.6),M.boxGray);lid.position.set(0,7.2,4);lidG.add(lid);
+})();
+let lidOn=true;
+window.toggleLid=function(){lidOn=!lidOn;lidG.visible=lidOn};
+// ---- tester ESP32-S3 ----
+const esp=new THREE.Group();esp.position.set(-10.5,0,-3);scene.add(esp);
+box(6,0.25,9,M.pcb,0,0.13,0,esp);
+box(1.6,0.5,0.8,M.silver,0,0.35,-4.2,esp);
+box(1.8,0.35,1.8,M.chip,0,0.3,0.6,esp);
+for(let i=0;i<8;i++){box(0.35,0.32,0.5,M.gold,-2.7,0.28,-3.4+i*0.95,esp);box(0.35,0.32,0.5,M.gold,2.7,0.28,-3.4+i*0.95,esp)}
+const espTag=labelSprite('ESP32-S3 TESTER',1);espTag.position.set(0,0.32,3.2);espTag.rotation.x=-Math.PI/2;esp.add(espTag);
+function dome(color,x,z,parent){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(0.42,20,14,0,Math.PI*2,0,Math.PI/2),
+    new THREE.MeshStandardMaterial({color:0x222222,emissive:color,emissiveIntensity:0.06,roughness:0.25}));
+  m.position.set(x,0.26,z);(parent||scene).add(m);return m;
+}
+const ledG=dome(0x22c55e,-6.6,0.5),ledR=dome(0xef4444,-6.6,2.0);
+const rgb=dome(0x22c55e,-10.5,2.4,esp);
+function tactile(color,x,z,parent,action){
+  const g=new THREE.Group();g.position.set(x,0,z);
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.55,0.3,20),M.black);base.position.y=0.4;g.add(base);
+  const cap=new THREE.Mesh(new THREE.CylinderGeometry(0.38,0.38,0.35,20),
+    new THREE.MeshStandardMaterial({color,roughness:0.4}));cap.position.y=0.65;cap.userData.action=action;g.add(cap);
+  (parent||scene).add(g);return cap;
+}
+const btnCap=tactile(0xd63c2f,-10.5,4.2,esp,'btn');
+const spoofCap=tactile(0xeab308,-8.9,4.2,esp,'spoofbtn');
+const wifiCap=tactile(0x2563eb,-7.3,4.2,esp,'wifitoggle'); // GPIO18 maintained (sim: toggles)
+const resetCap=tactile(0x7f1d1d,-5.7,4.2,esp,'factoryreset'); // GPIO15 10 s hold -> NVS wipe
+const otaCap=tactile(0x0ea5e9,-4.1,4.2,esp,'otacheck'); // OTA check now
+const apLed=dome(0x3b82f6,-6.6,3.5); // AP up indicator
+// ---- power corner: dual bucks + fuse on 48V ----
+box(4.2,1.2,3.0,M.buck,-10.5,0.6,7.6);   // 48->12V coils
+box(4.2,1.2,3.0,M.buck2,-5.6,0.6,7.6);   // 48->5V logic
+const buckTag=labelSprite('48V->12V COILS',1.1);buckTag.position.set(-10.5,1.5,7.6);buckTag.rotation.x=-Math.PI/2;scene.add(buckTag);
+const buck2Tag=labelSprite('48V->5V LOGIC',1.1);buck2Tag.position.set(-5.6,1.5,7.6);buck2Tag.rotation.x=-Math.PI/2;scene.add(buck2Tag);
+const fuseLamp=dome(0x22c55e,-13.2,6.2); // 48V fuse OK lamp
+const rail48Tag=labelSprite('48V BUS (shared w/ meter)  DAD: fuse+wire',1.6);
+rail48Tag.position.set(-8,0.15,-6.6);rail48Tag.rotation.x=-Math.PI/2;scene.add(rail48Tag);
+// ---- MAX485 module ----
+const m485=new THREE.Group();m485.position.set(-3.4,0,-2);scene.add(m485);
+box(3.4,0.22,4.6,new THREE.MeshStandardMaterial({color:0x1e40af,roughness:0.6}),0,0.11,0,m485);
+box(1.1,0.9,1.1,M.terminal,-0.9,0.6,1.5,m485);box(1.1,0.9,1.1,M.terminal,0.9,0.6,1.5,m485);
+for(let i=0;i<4;i++)box(0.28,0.3,0.4,M.gold,-1.3+i*0.85,0.3,-1.9,m485);
+const deLed=dome(0xeab308,1.2,-1.2,m485);
+const m485Tag=labelSprite('MAX485  DE=GPIO4',0.9);m485Tag.position.set(0,0.3,0.2);m485Tag.rotation.x=-Math.PI/2;m485.add(m485Tag);
+// ---- GX16-5 sockets on panel ----
+function gx16(x,z,id){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  const ring=new THREE.Mesh(new THREE.CylinderGeometry(0.95,0.95,1.4,24),M.steel);
+  ring.position.y=0.7;ring.userData.action=id;g.add(ring);
+  const face=new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.7,0.3,24),M.black);
+  face.position.y=1.45;face.userData.action=id;g.add(face);
+  for(let i=0;i<5;i++){
+    const a=i/5*Math.PI*2;
+    const pin=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.35,8),M.gold);
+    pin.position.set(Math.cos(a)*0.38,1.6,Math.sin(a)*0.38);g.add(pin);
+  }
+  const tag=labelSprite(id,0.8);tag.position.set(0,0.2,1.6);g.add(tag);
+  return ring;
+}
+const j1=gx16(1.5,12.5,'J1');const j2=gx16(5.0,12.5,'J2');
+const gxTag=labelSprite('J1 BUS: 48V GND A B R1 | J2: R2-R6 | AUX: R7 R8 (DAD table)',2.2);
+gxTag.position.set(3.2,0.12,14.6);gxTag.rotation.x=-Math.PI/2;scene.add(gxTag);
+// ---- meter with REAL photo texture ----
+const meterG=new THREE.Group();meterG.position.set(8.6,0,-2.5);scene.add(meterG);
+box(7.0,4.2,4.6,M.dark,0,2.1,0,meterG);
+box(7.1,0.5,4.7,M.black,0,0.25,0,meterG);
+const photoTex=new THREE.TextureLoader().load('/assets/meter-cluster.jpg');
+const photo=new THREE.Mesh(new THREE.PlaneGeometry(6.4,3.2),new THREE.MeshBasicMaterial({map:photoTex}));
+photo.position.set(0,2.3,2.32);photo.rotation.x=-0.05;meterG.add(photo);
+const lcdCanvas=document.createElement('canvas');lcdCanvas.width=512;lcdCanvas.height=120;
+const lcdTex=new THREE.CanvasTexture(lcdCanvas);
+const lcd=new THREE.Mesh(new THREE.PlaneGeometry(6.2,1.35),new THREE.MeshBasicMaterial({map:lcdTex,transparent:true}));
+lcd.position.set(0,0.95,2.33);lcd.rotation.x=-0.05;meterG.add(lcd);
+const meterTag=labelSprite('AYCA E-RICKSHAW METER (real photo)',1.1);
+meterTag.position.set(8.6,4.8,-2.2);scene.add(meterTag);
+const mPow=tactile(0x111111,11.4,-0.6,scene,'meterpower');
+const mMode=tactile(0x9aa3b5,12.6,-0.6,scene,'meterpoll');
+function drawLCD(sc,connected,stage){
+  const g=lcdCanvas.getContext('2d');g.clearRect(0,0,512,120);
+  g.fillStyle=connected?'rgba(6,40,70,0.92)':'rgba(70,10,10,0.92)';g.fillRect(0,0,512,120);
+  g.fillStyle=connected?'#7dd3fc':'#f87171';g.font='bold 24px monospace';
+  g.fillText(connected?'● LINK':'○ NO LINK',14,30);
+  g.fillStyle='#fff';g.font='bold 40px monospace';
+  g.fillText((sc.v||'--')+'V '+(sc.a||'--')+'A '+(sc.soc||'--')+'%',14,76);
+  g.fillStyle='#93c5fd';g.font='22px monospace';
+  g.fillText('reg 0x'+(sc.page||'--')+' '+(sc.ah||'--')+'Ah '+(sc.cells||'--')+'S '+(sc.t||'--')+'C',14,106);
+  if(stage){g.fillStyle='#fbbf24';g.font='bold 22px monospace';g.fillText('SPOOF '+stage,380,30)}
+  lcdTex.needsUpdate=true;
+}
+// ---- 8 relay modules ----
+const relayMeshes=[],coilLeds=[];
+for(let i=0;i<8;i++){
+  const x=-8.5+i*3.0,z=9.5;
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  const body=box(2.5,1.1,1.9,M.relayBlue,0,0.55,0,g);body.userData.action='relay'+i;
+  box(0.7,0.7,0.7,M.terminal,0.75,1.35,0.5,g);box(0.7,0.7,0.7,M.terminal,0.75,1.35,-0.5,g);
+  const coil=new THREE.Mesh(new THREE.SphereGeometry(0.22,14,10),
+    new THREE.MeshStandardMaterial({color:0x330000,emissive:0xef4444,emissiveIntensity:0}));
+  coil.position.set(-0.7,1.15,0);g.add(coil);coilLeds.push(coil);
+  const tag=labelSprite('R'+(i+1),0.55);tag.position.set(0,0.35,1.15);g.add(tag);
+  relayMeshes.push(body);
+}
+const relayTag=labelSprite('8x RELAY  GPIO 5 6 7 8 9 12 13 14 -> J1/J2/AUX',1.8);
+relayTag.position.set(-1,0.1,7.6);relayTag.rotation.x=-Math.PI/2;scene.add(relayTag);
+// ---- electricity flow viz: electron streams sized by live rail current ----
+const flows=[]; // {curve,color,speed,count,group}
+function flowPath(a,b,color,key,lift){
+  const mid=a.clone().lerp(b,0.5);mid.y=Math.max(a.y,b.y)+(lift||1.0);
+  const curve=new THREE.CatmullRomCurve3([a,mid,b]);
+  const f={curve,color,key,speed:0.4,count:0,dots:[],group:new THREE.Group()};
+  scene.add(f.group);flows.push(f);return f;
+}
+const dotGeo=new THREE.SphereGeometry(0.14,8,6);
+function flowMat(color){return new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.95})}
+function syncFlow(f,wantCount,speed){
+  f.speed=speed;
+  while(f.dots.length<wantCount){
+    const m=new THREE.Mesh(dotGeo,flowMat(f.color));
+    m.userData.t=Math.random();f.group.add(m);f.dots.push(m);
+  }
+  while(f.dots.length>wantCount){const m=f.dots.pop();f.group.remove(m)}
+}
+function stepFlows(dt){
+  flows.forEach(f=>{
+    f.dots.forEach(m=>{m.userData.t+=dt*f.speed;if(m.userData.t>=1)m.userData.t-=1;
+      m.position.copy(f.curve.getPoint(m.userData.t))});
+  });
+}
+// flow paths are instantiated after V() is defined (see below: flow48...)
+const relayFlows=[];
+// live current labels (canvas sprites, updated per poll)
+function meterSprite(){
+  const c=document.createElement('canvas');c.width=256;c.height=64;
+  const t=new THREE.CanvasTexture(c);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(3.4,0.85),new THREE.MeshBasicMaterial({map:t,transparent:true}));
+  m.userData.set=(txt,col)=>{const g=c.getContext('2d');g.clearRect(0,0,256,64);
+    g.fillStyle='rgba(5,8,14,0.85)';g.fillRect(0,0,256,64);
+    g.font='bold 30px monospace';g.fillStyle=col||'#f87171';g.textAlign='center';g.fillText(txt,128,44);t.needsUpdate=true};
+  return m;
+}
+const m48=meterSprite();m48.position.set(-13.2,2.2,0);scene.add(m48);
+const m12=meterSprite();m12.position.set(-10.5,2.4,7.6);scene.add(m12);
+const m5=meterSprite();m5.position.set(-5.6,2.4,7.6);scene.add(m5);
+// ---- wires ----
+const wires=new THREE.Group();scene.add(wires);
+function wire(a,b,color,r){
+  const mid=a.clone().lerp(b,0.5);mid.y=Math.max(a.y,b.y)+1.2;
+  const curve=new THREE.CatmullRomCurve3([a,mid,b]);
+  wires.add(new THREE.Mesh(new THREE.TubeGeometry(curve,20,r||0.09,8),
+    new THREE.MeshStandardMaterial({color,roughness:0.5})));
+  return curve;
+}
+const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+// electron-flow paths (ride the same routes as the tube wires)
+const flow48=flowPath(V(-13.2,0.75,5.5),V(-13.2,0.75,-5.5),0xff5040,'i48',0.4);
+const flow5=flowPath(V(-5.6,1.3,7.6),V(-9.0,0.6,-1.0),0x22d3ee,'i5',1.2);
+const flow12=flowPath(V(-10.5,1.3,7.6),V(-4.0,1.2,8.8),0xfb923c,'i12',1.2);
+const flowA=flowPath(V(-2.5,1.05,-0.3),V(6.2,1.35,-0.5),0x4ade80,'ab',1.6);
+const flowB=flowPath(V(6.6,1.15,-0.5),V(-2.1,0.9,-0.25),0x4ade80,'ab2',1.6);
+for(let i=0;i<8;i++) relayFlows.push(flowPath(V(-8.5+i*3.0+0.75,1.85,9.0),V(-8.5+i*3.0,0.55,11.2),0xfacc15,'r'+i,0.5));
+wire(V(-10,0.5,-4.2),V(-4.2,0.5,-3.6),0xe6b800);
+wire(V(-10,0.5,-3.4),V(-4.2,0.5,-3.2),0xe07b24);
+wire(V(-9.2,0.5,-2.6),V(-4.1,0.5,-2.8),0xf5f5f5);
+wire(V(-11.5,0.4,-1.5),V(-4.6,0.4,-1.5),0x2b2f36);
+wire(V(-13.2,0.6,5.5),V(-13.2,0.6,-5.5),0xd63c2f,0.13); // 48V rail visual
+wire(V(-2.5,0.9,-0.3),V(1.5,1.6,12.5),0x2fa84f,0.11);   // A -> J1
+wire(V(-2.1,0.75,-0.25),V(1.5,1.6,12.5),0x9df0b8,0.11); // B -> J1
+wire(V(1.5,1.6,12.5),V(6.2,1.2,-0.5),0x2fa84f,0.11);    // J1 -> meter
+wire(V(1.5,1.6,12.5),V(6.6,1.0,-0.5),0x9df0b8,0.11);
+const sigCols=[0x8b5cf6,0x6366f1,0x3b82f6,0x0ea5e9,0x14b8a6,0x22c55e,0xa3e635,0xeab308];
+const relayX=i=>-8.5+i*3.0;
+wire(V(relayX(0)+0.75,1.7,9.0),V(1.5,1.6,12.5),sigCols[0],0.07); // R1 -> J1-5
+for(let i=1;i<6;i++) wire(V(relayX(i)+0.75,1.7,9.0),V(5.0,1.6,12.5),sigCols[i],0.07); // R2-R6 -> J2
+wire(V(relayX(6)+0.75,1.7,9.0),V(6.4,1.2,-0.3),sigCols[6],0.07); // R7 AUX -> meter
+wire(V(relayX(7)+0.75,1.7,9.0),V(6.8,1.2,-0.3),sigCols[7],0.07); // R8 AUX -> meter
+wire(V(5.0,1.6,12.5),V(7.6,1.2,-0.4),0xc99300,0.09);  // J2 bundle -> meter
+for(let i=0;i<8;i++) wire(V(-8.2,0.5,-0.2+i*0.0),V(relayX(i),1.1,8.8),sigCols[i],0.06); // ESP sig
+const pollCurve=new THREE.CatmullRomCurve3([V(6.2,1.4,-0.5),V(2.0,2.6,4.0),V(-2.5,1.6,-0.5),V(-9.5,1.2,-3.8)]);
+const replyCurve=new THREE.CatmullRomCurve3([V(-9.5,1.2,-3.8),V(-2.5,1.6,-0.5),V(2.0,2.6,4.0),V(6.2,1.4,-0.5)]);
+let pulses=[];
+function pulse(curve,color){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(0.28,12,10),new THREE.MeshBasicMaterial({color}));
+  m.userData={curve,t:0};scene.add(m);pulses.push(m);
+}
+// ---- interaction ----
+const ray=new THREE.Raycaster(),ptr=new THREE.Vector2();
+const clickables=[btnCap,spoofCap,wifiCap,resetCap,otaCap,mPow,mMode,j1,j2,...relayMeshes];
+// press-and-HOLD for factory reset: pointerdown starts, pointerup fires held secs
+let holdTimer=null,holdStart=0,holdAction=null;
+canvas.addEventListener('pointerdown',e=>{
+  const r=canvas.getBoundingClientRect();
+  ptr.x=((e.clientX-r.left)/r.width)*2-1;ptr.y=-((e.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(ptr,camera);
+  const hit=ray.intersectObjects(clickables,false)[0];
+  if(!hit)return;const a=hit.object.userData.action;
+  if(a==='factoryreset'){holdAction=a;holdStart=Date.now();
+    holdTimer=setTimeout(()=>{apiHold(10);holdTimer=null},3000); // 3 s real = 10 s sim hold
+    return;
+  }
+  if(a==='btn')press('btn');
+  else if(a==='spoofbtn')press('spoofbtn');
+  else if(a==='wifitoggle')apiWifi();
+  else if(a==='otacheck')apiOtaCheck();
+  else if(a==='meterpower')apiMeter(!(ST&&ST.meter_on));
+  else if(a==='meterpoll')apiCmd();
+  else if(a==='J1'||a==='J2')pulse(replyCurve,0x2fa84f);
+  else if(a&&a.startsWith('relay'))toggleRelay3D(+a.slice(5));
+});
+canvas.addEventListener('pointerup',()=>{
+  if(holdTimer){clearTimeout(holdTimer);holdTimer=null;
+    const s=(Date.now()-holdStart)/1000;
+    apiHold(Math.round(s*3.3)); // scale: 3 s hold = 10 s sim
+  }
+  holdAction=null;
+});
+let ST=null,lastReg=-1;
+async function toggleRelay3D(i){
+  const on=!(ST&&ST.seq&&ST.seq.on[i]);
+  await api('/api/relay',{method:'POST',body:JSON.stringify({i,on})});poll();
+}
+async function press(id){await api('/api/press',{method:'POST',body:JSON.stringify({id})});poll()}
+async function apiRun(v){await api('/api/run',{method:'POST',body:JSON.stringify({running:v})});poll()}
+async function apiMeter(v){await api('/api/meter',{method:'POST',body:JSON.stringify({on:v})});poll()}
+async function apiCmd(){await api('/api/cmd',{method:'POST',body:JSON.stringify({cmd:'STATUS?'})});poll()}
+async function apiWifi(){const r=await api('/api/wifi',{method:'POST',body:JSON.stringify({on:!(ST&&ST.wifi_on)})});
+  const f=document.getElementById('espframe');f.src=f.src;poll()}
+async function apiOtaCheck(){const r=await api('/esp/api/ota',{method:'POST',body:JSON.stringify({cmd:'check',pass:'sim'})});
+  const f=document.getElementById('espframe');f.src=f.src;poll()}
+async function apiHold(secs){const r=await api('/api/hold',{method:'POST',body:JSON.stringify({id:'btn',secs})});
+  if(r.reset){const f=document.getElementById('espframe');f.src=f.src}poll()}
+async function seqStart(){const r=await api('/api/seq',{method:'POST',body:JSON.stringify({cmd:'start'})});
+  document.getElementById('seqmsg2').textContent=r.ok?'running':'ERR: '+(r.err||'');poll()}
+async function seqStop(){await api('/api/seq',{method:'POST',body:JSON.stringify({cmd:'stop'})});poll()}
+async function saveNames(){const b={labels:[]};for(let i=0;i<8;i++)b.labels.push(document.getElementById('nm'+i).value);
+  const r=await api('/api/labels',{method:'POST',body:JSON.stringify(b)});
+  document.getElementById('lblmsg2').textContent=r.ok?'saved':'ERR: '+(r.err||'');
+  const f=document.getElementById('espframe');f.src=f.src;poll()}
+async function apiFactoryReset(){if(!confirm('Hold GPIO15 10 s = factory reset (wipes config)?'))return;
+  await apiHold(10);const f=document.getElementById('espframe');f.src=f.src;poll()}
+function setEm(m,on,intensity){m.material.emissiveIntensity=on?(intensity||1.6):0.06}
+async function poll(){
+  ST=await api('/api/state');
+  setEm(ledG,ST.leds.ledG);setEm(ledR,ST.leds.ledR);
+  rgb.material.emissive.set(ST.connected?0x22c55e:0xef4444);setEm(rgb,true);
+  deLed.material.emissive.set(ST.de_tx?0xeab308:0x222222);setEm(deLed,ST.de_tx,2.0);
+  setEm(fuseLamp,true,1.2);
+  setEm(apLed,ST.wifi_on,ST.wifi_on?1.8:0.06);
+  apLed.material.emissive.set(ST.wifi_on?0x3b82f6:0x222222);
+  // electricity flow: particle counts + speed follow live rail currents
+  const en=ST.energy||{i_48_ma:0,i_12_ma:0,i_5_ma:0,relay_ma:[]};
+  syncFlow(flow48,Math.min(14,2+Math.round(en.i_48_ma/40)),0.5+en.i_48_ma/300);
+  syncFlow(flow5,ST.wifi_on?5:3,0.8);
+  syncFlow(flow12,en.i_12_ma>0?Math.min(12,2+Math.round(en.i_12_ma/60)):0,1.2);
+  const abLive=ST.meter_on&&ST.connected;
+  syncFlow(flowA,abLive?4:0,2.0);syncFlow(flowB,abLive?4:0,2.0);
+  relayFlows.forEach((f,i)=>{const on=ST.seq&&ST.seq.on[i];
+    syncFlow(f,on?4:0,1.6)});
+  m48.userData.set('48V '+(en.i_48_ma||0)+'mA','#f87171');
+  m12.userData.set('12V '+(en.i_12_ma||0)+'mA','#fb923c');
+  m5.userData.set('5V '+(en.i_5_ma||0)+'mA','#22d3ee');
+  const ids=Object.keys(ST.relays);
+  ids.forEach((id,k)=>{if(coilLeds[k])coilLeds[k].material.emissiveIntensity=ST.relays[id]?2.2:0});
+  if(ST.meter_on&&ST.connected&&ST.reg_idx!==lastReg){lastReg=ST.reg_idx;pulse(pollCurve,0xe07b24);setTimeout(()=>pulse(replyCurve,0x22c55e),450)}
+  const st=ST.spoof&&ST.spoof.t0>=0?(ST.tick-ST.spoof.t0<ST.spoof.s1.secs?1:(ST.tick-ST.spoof.t0<ST.spoof.s1.secs+ST.spoof.s2.secs?2:0)):0;
+  drawLCD(ST.screen||{},ST.connected,st);
+  const lk=ST.connected;
+  document.getElementById('link').innerHTML=' <span class="pill '+(lk?'green':'red')+'">'+(lk?'● GREEN link':'● RED no-link')+'</span>'
+    +(ST.wifi_on?'':' <span class="pill amber">AP OFF (GPIO18)</span>');
+  const wb=document.getElementById('wifibtn');wb.textContent='📶 WiFi: '+(ST.wifi_on?'ON':'OFF');wb.className=ST.wifi_on?'g':'off';
+  document.getElementById('espstate').textContent=ST.wifi_on?'live':'AP OFF — real HW drops the page too';
+  // relay board row (names persist via labels.json)
+  document.getElementById('seqline').textContent='seq '+(ST.seq.running?'RUNNING':'IDLE')+' · cyc '+ST.seq.cycles+' · act '+ST.seq.acts;
+  const rb=document.getElementById('rboard');rb.innerHTML='';
+  ST.seq.on.forEach((on,i)=>{const nm=(ST.labels&&ST.labels[i])||('R'+(i+1));
+    rb.innerHTML+='<button class="rly'+(on?' on':'')+'" onclick="toggleRelay3D('+i+')">'+nm+'<small>'+(on?'ON':'OFF')+'</small></button>'});
+  const rn=document.getElementById('rnames');
+  if(rn.children.length===0){let h='';for(let i=0;i<8;i++)h+='<input class="nmin" id="nm'+i+'" maxlength=11>';rn.innerHTML=h;}
+  (ST.labels||[]).forEach((nm,i)=>{const e=document.getElementById('nm'+i);if(e&&document.activeElement!==e)e.value=nm});
+  try{const g=await api('/api/gx16');document.getElementById('gx16line').textContent=
+    'J1 BUS: '+Object.entries(g.gx16.J1_BUS).map(e=>e[0]+'='+e[1]).join(' · ')+' | J2 LOADS: '+Object.entries(g.gx16.J2_LOADS).map(e=>e[0]+'='+e[1]).join(' · ')+' | AUX: R7/R8 ('+g.gx16.note+')'}catch(e){}
+  document.getElementById('ser').textContent=(ST.serial||[]).join('\n');
+  const pre=document.getElementById('ser');pre.scrollTop=pre.scrollHeight;
+}
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=clock.getDelta();
+  pulses=pulses.filter(p=>{p.userData.t+=dt*2.2;if(p.userData.t>=1){scene.remove(p);return false}
+    p.position.copy(p.userData.curve.getPoint(p.userData.t));return true});
+  stepFlows(dt);
+  resize();ctl.update();renderer.render(scene,camera);
+}
+window.toggleLid=toggleLid;window.apiWifi=apiWifi;window.apiOtaCheck=apiOtaCheck;window.apiHold=apiHold;window.apiFactoryReset=apiFactoryReset;
+window.seqStart=seqStart;window.seqStop=seqStop;window.saveNames=saveNames;
+window.toggleRelay3D=toggleRelay3D;window.press=press;window.apiRun=apiRun;window.apiMeter=apiMeter;window.apiCmd=apiCmd;
+drawLCD({},false,0);animate();poll();setInterval(poll,1000);
+</script>
+</body></html>
